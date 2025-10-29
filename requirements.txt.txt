@@ -1,0 +1,9 @@
+streamlit
+torch
+torchvision
+torchaudio
+open_clip_torch
+faiss-cpu
+opencv-python-headless
+pillow
+numpy==1.26.4

@@ -1,0 +1,70 @@
+import streamlit as st
+from sklearn.neighbors import NearestNeighbors
+import torch
+import open_clip
+from PIL import Image
+import numpy as np
+import os
+
+# --- 1️⃣ モデル準備 ---
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, _, preprocess = open_clip.create_model_and_transforms('ViT-H-14', pretrained='laion2b_s32b_b79k')
+model = model.to(device)
+model.eval()
+
+# --- 2️⃣ cards フォルダから画像を読み込む ---
+image_folder = "cards"
+image_paths = [os.path.join(image_folder, f) for f in os.listdir(image_folder) if f.lower().endswith(('jpg','png','jpeg'))]
+if len(image_paths) == 0:
+    st.error("⚠️ 'cards' フォルダに画像がありません。")
+else:
+    st.success(f"{len(image_paths)} 枚のトレカ画像を読み込みました。")
+
+# --- 3️⃣ 特徴量を抽出してデータベース作成 ---
+@st.cache_resource
+def build_index():
+    features = []
+    for p in image_paths:
+        img = preprocess(Image.open(p)).unsqueeze(0).to(device)
+        with torch.no_grad():
+            feat = model.encode_image(img)
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+            features.append(feat.cpu().numpy())
+    features = np.vstack(features)
+
+    # --- FAISSの代わりに sklearn を使用 ---
+    index = NearestNeighbors(n_neighbors=3, metric="cosine")
+    index.fit(features)
+    return index, features
+
+# --- 4️⃣ 検索UI ---
+st.title("📸 Hongjoongトレカ検索")
+st.write("アップロード画像と最も類似するトレカを検索します。")
+
+uploaded = st.file_uploader("トレカ写真をアップロードしてください", type=["jpg", "png", "jpeg"])
+
+if uploaded:
+    query_img = Image.open(uploaded).convert("RGB")
+    st.image(query_img, caption="アップロード画像", width=300)
+
+    # 特徴量抽出
+    image_tensor = preprocess(query_img).unsqueeze(0).to(device)
+    with torch.no_grad():
+        q_feat = model.encode_image(image_tensor)
+        q_feat = q_feat / q_feat.norm(dim=-1, keepdim=True)
+
+    q_feat = q_feat.cpu().numpy().astype("float32")
+
+    # 類似検索（コサイン類似度）
+ D, I = index.kneighbors(q_feat.cpu().numpy(), n_neighbors=3)
+
+    st.subheader("🔍 類似トレカ候補")
+
+    for rank, idx in enumerate(I[0]):
+        match_path = image_paths[idx]
+        similarity = D[0][rank]
+        st.image(match_path, caption=f"候補 {rank+1}: {os.path.basename(match_path)}（類似度 {similarity:.4f}）", width=300)
+
+    best_score = float(D[0][0])
+    if best_score > 0.98:
+        st.success("✅ 一致度が非常に高い！（{best_score:.3f}")
